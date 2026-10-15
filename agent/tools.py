@@ -139,8 +139,9 @@ def ask_expert(question: str, model: str = ""):
 
 
 @tool
-def finish(summary: str):
-    """结束本轮工作。summary 写清：做了什么、结果如何、下一轮最该做什么。"""
+def finish(summary: str, sleep_minutes: int = 10):
+    """结束本轮工作。summary 写清：做了什么、结果如何、下一轮最该做什么。
+    sleep_minutes 是多久后开始下一轮：手上还有可以马上接着做的事就填 1～5；在等人类答复或外部结果（数据、反馈）就填 60～240，人类一答复你就会被提前唤醒。不要在没事可做时频繁醒来空转。"""
     return "ok"
 
 

@@ -1,11 +1,14 @@
 """外层看守：循环运行 agent，每轮 git 提交；agent 把自己改坏了就回滚代码。
 agent 修改了自己（prompt、工具、主循环、技能）或本轮失败时，推送到人类微信；每 REVIEW_EVERY 轮调用 review.py 复盘。
-用法：python supervisor.py [轮数，默认 1] [每轮间隔秒数，默认 60]
+用法：python supervisor.py [轮数，默认 0 表示一直运行]
+每轮之间的休眠时间由 agent 在 finish 里决定；人类答复 requests.md 会提前唤醒。
 agent 不能修改本文件。"""
+import itertools
 import json
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -60,10 +63,23 @@ def sessions():
     return [json.loads(l) for l in text.splitlines() if l]
 
 
+def sleep(minutes):
+    """休眠，期间人类修改了 requests.md 就提前醒来。"""
+    requests_file = ROOT / "workspace" / "requests.md"
+    mtime = lambda: requests_file.stat().st_mtime if requests_file.exists() else 0
+    start, end = mtime(), time.time() + minutes * 60
+    print(f"\n休眠 {minutes:.0f} 分钟，到 {datetime.fromtimestamp(end):%H:%M}（答复 requests.md 会提前唤醒）")
+    while time.time() < end:
+        time.sleep(30)
+        if mtime() != start:
+            print("检测到人类答复，提前唤醒")
+            return
+
+
 def main():
-    rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-    interval = int(sys.argv[2]) if len(sys.argv) > 2 else 60
+    rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 0
     review_every = int(secrets().get("REVIEW_EVERY", 5))
+    failures = 0
 
     if not (ROOT / ".git").exists():
         git("init", "-q")
@@ -71,8 +87,8 @@ def main():
     good = git("rev-parse", "HEAD")
     (ROOT / "logs").mkdir(exist_ok=True)
 
-    for i in range(1, rounds + 1):
-        print(f"\n========== 第 {i}/{rounds} 轮 ==========")
+    for i in itertools.count(1):
+        print(f"\n========== 第 {i} 轮 {datetime.now():%m-%d %H:%M} ==========")
         try:
             r = subprocess.run([sys.executable, "agent/loop.py"], cwd=ROOT, timeout=3600, stderr=subprocess.PIPE, text=True)
             code, error = r.returncode, r.stderr[-1500:]
@@ -85,6 +101,7 @@ def main():
             error = check()
 
         if not error:
+            failures = 0
             prev = good
             commit(f"round {i}")
             good = git("rev-parse", "HEAD")
@@ -94,6 +111,7 @@ def main():
                 notify(f"第{i}轮自我修改：{','.join(Path(f).name for f in files)}",
                        f"**本轮总结**：{sessions()[-1]['summary']}\n\n```diff\n{diff[:4000]}\n```")
         else:
+            failures += 1
             broken = git("diff", "--name-only", good, "--", *CODE).split()
             print(f"本轮失败，代码回滚到 {good[:8]}")
             git("checkout", good, "--", *CODE)
@@ -111,11 +129,19 @@ def main():
                 print("复盘超时，跳过")
             commit(f"review after round {i}")
 
-        if code == 3:
-            print("今日 token 预算耗尽，停止")
+        if failures >= 3:
+            notify("连续失败 3 次，已停止运行", "请检查网络、API 余额和 logs/supervisor.out，处理好后重新运行 ./start.sh")
             break
-        if i < rounds:
-            time.sleep(interval)
+        if i == rounds:
+            break
+        if code == 3:
+            tomorrow = (datetime.now() + timedelta(days=1)).replace(hour=0, minute=5, second=0)
+            print("今日 token 预算耗尽")
+            sleep((tomorrow - datetime.now()).total_seconds() / 60)
+        elif error:
+            sleep(5)
+        else:
+            sleep(min(max(sessions()[-1].get("sleep") or 10, 1), 240))
 
 
 if __name__ == "__main__":

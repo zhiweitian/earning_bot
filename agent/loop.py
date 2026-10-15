@@ -108,7 +108,7 @@ def run():
         {"role": "user", "content": "新一轮开始。"},
     ]
     log = open(LOGS / f"{datetime.now():%Y%m%d-%H%M%S}.jsonl", "a", encoding="utf-8")
-    summary = None
+    summary, sleep = None, None
 
     for step in range(MAX_STEPS + 3):
         if tokens_today() > DAILY_TOKENS:
@@ -136,6 +136,7 @@ def run():
             out = tools.call(name, args)
             if name == "finish":
                 summary = json.loads(args).get("summary", "")
+                sleep = json.loads(args).get("sleep_minutes")
             if len(out) > OUT_LIMIT:
                 out = out[:OUT_LIMIT] + f"\n...（已截断，共 {len(out)} 字符）"
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": out})
@@ -144,7 +145,7 @@ def run():
             break
 
     with open(LOGS / "sessions.jsonl", "a", encoding="utf-8") as f:
-        row = {"time": datetime.now().strftime("%m-%d %H:%M"), "summary": summary or "（未总结）"}
+        row = {"time": datetime.now().strftime("%m-%d %H:%M"), "summary": summary or "（未总结）", "sleep": sleep}
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
     print(f"\n本轮结束：{summary}")
     if tokens_today() > DAILY_TOKENS:
