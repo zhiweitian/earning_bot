@@ -27,8 +27,17 @@ def commit(msg):
     git("commit", "-qm", msg)
 
 
-def healthy():
-    return subprocess.run([sys.executable, "agent/loop.py", "--check"], cwd=ROOT).returncode == 0
+def check():
+    """返回自检的错误信息，通过则返回空字符串。"""
+    r = subprocess.run([sys.executable, "agent/loop.py", "--check"], cwd=ROOT, capture_output=True, text=True)
+    return "" if r.returncode == 0 else f"自检 loop.py --check 不通过：\n{(r.stdout + r.stderr)[-1500:]}"
+
+
+def record_failure(text):
+    """把失败写进本轮总结，下一轮 agent 会在"最近几轮"里看到。"""
+    row = {"time": time.strftime("%m-%d %H:%M"), "summary": f"【本轮失败，由看守程序记录】{text}"}
+    with open(ROOT / "logs" / "sessions.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def notify(title, body):
@@ -51,15 +60,22 @@ if not (ROOT / ".git").exists():
     git("init", "-q")
     commit("init")
 good = git("rev-parse", "HEAD")
+(ROOT / "logs").mkdir(exist_ok=True)
 
 for i in range(1, ROUNDS + 1):
     print(f"\n========== 第 {i}/{ROUNDS} 轮 ==========")
     try:
-        code = subprocess.run([sys.executable, "agent/loop.py"], cwd=ROOT, timeout=3600).returncode
+        r = subprocess.run([sys.executable, "agent/loop.py"], cwd=ROOT, timeout=3600, stderr=subprocess.PIPE, text=True)
+        code, error = r.returncode, r.stderr[-1500:]
+        sys.stderr.write(r.stderr)
     except subprocess.TimeoutExpired:
-        code = -1
+        code, error = -1, "运行超过 1 小时，被强制结束。可能卡在某个命令上，或者陷入了死循环。"
+    if code not in (0, 3):
+        error = f"退出码 {code}，报错：\n{error.strip()}"
+    else:
+        error = check()
 
-    if code in (0, 3) and healthy():
+    if not error:
         prev = good
         commit(f"round {i}")
         good = git("rev-parse", "HEAD")
@@ -70,10 +86,13 @@ for i in range(1, ROUNDS + 1):
                    f"**本轮总结**：{last_summary()}\n\n```diff\n{diff[:4000]}\n```")
     else:
         broken = git("diff", "--name-only", good, "--", *CODE).split()
-        print(f"本轮失败（exit {code}）或自检不通过，代码回滚到 {good[:8]}")
+        print(f"本轮失败，代码回滚到 {good[:8]}")
         git("checkout", good, "--", *CODE)
+        reverted = (f"你本轮对 {', '.join(broken)} 的修改已被撤销；如果 memory 里记录了这些修改，请更正。"
+                    if broken else "代码没有被修改，失败不是改代码导致的。")
+        record_failure(f"{error}\n{reverted}")
         commit(f"round {i} rollback")
-        notify(f"第{i}轮失败，已回滚", f"退出码：{code}\n被回滚的改动：{', '.join(broken) or '无（不是改代码导致的）'}\n详情看 logs/ 里最新的日志。")
+        notify(f"第{i}轮失败，已回滚", f"{reverted}\n\n```\n{error}\n```")
 
     if code == 3:
         print("今日 token 预算耗尽，停止")
