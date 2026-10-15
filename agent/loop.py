@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 from datetime import datetime, date
 from pathlib import Path
@@ -47,7 +48,33 @@ def recent_sessions(n=5):
     return "\n".join(f"- [{r['time']}] {r['summary']}" for r in rows[-n:]) or "（这是第一轮）"
 
 
-def build_system():
+REQUEST_RE = re.compile(r"## #(\d+) \[(\S+)\][^\n]*\n问题：(.*?)\n答复：(.*?)(?=\n## #|\Z)", re.S)
+
+
+def inbox():
+    """取出人类已答复但还没送达的请求，标记为已送达；同时列出仍在等待的请求。"""
+    delivered, waiting = [], []
+
+    def mark(m):
+        n, status, q, a = m.group(1), m.group(2), m.group(3).strip(), m.group(4).strip()
+        if status != "待答复":
+            return m.group(0)
+        if not a:
+            waiting.append(f"#{n}")
+            return m.group(0)
+        delivered.append(f"- #{n} 问：{q}\n  答：{a}")
+        return m.group(0).replace("[待答复]", "[已送达]", 1)
+
+    text = read(tools.REQUESTS)
+    if text:
+        tools.REQUESTS.write_text(REQUEST_RE.sub(mark, text), encoding="utf-8")
+    lines = delivered or ["（没有新答复）"]
+    if waiting:
+        lines.append(f"仍在等待答复（不要重复提问）：{' '.join(waiting)}")
+    return "\n".join(lines)
+
+
+def build_system(inbox_text="（没有新答复）"):
     s = read(AGENT / "prompt.md")
     for k, v in {
         "{time}": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -55,6 +82,9 @@ def build_system():
         "{memory}": read(AGENT / "memory.md") or "（空）",
         "{skills}": skills_list(),
         "{recent}": recent_sessions(),
+        "{inbox}": inbox_text,
+        "{secrets}": ", ".join(k for k in tools.SECRETS if k not in tools.PUBLIC_CONFIG) or "（暂无）",
+        "{experts}": os.getenv("EXPERT_MODELS") or "（未配置，暂时不能用 ask_expert）",
         "{max_steps}": str(MAX_STEPS),
     }.items():
         s = s.replace(k, v)
@@ -73,7 +103,7 @@ def compact(messages):
 def run():
     client = OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url="https://api.deepseek.com")
     messages = [
-        {"role": "system", "content": build_system()},
+        {"role": "system", "content": build_system(inbox())},
         {"role": "user", "content": "新一轮开始。"},
     ]
     log = open(LOGS / f"{datetime.now():%Y%m%d-%H%M%S}.jsonl", "a", encoding="utf-8")
@@ -125,7 +155,7 @@ if __name__ == "__main__":
     tools.WORKSPACE.mkdir(exist_ok=True)
     (AGENT / "skills").mkdir(exist_ok=True)
     if "--check" in sys.argv:
-        assert "{goal}" in read(AGENT / "prompt.md") and "{memory}" in read(AGENT / "prompt.md")
+        assert all(k in read(AGENT / "prompt.md") for k in ("{goal}", "{memory}", "{inbox}"))
         build_system()
         assert {"shell", "finish", "ask_human"} <= set(tools.TOOLS)
         print("check ok")
