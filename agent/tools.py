@@ -13,8 +13,10 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKSPACE = ROOT / "workspace"
 REQUESTS = WORKSPACE / "requests.md"
 SECRETS_FILE = ROOT / "secrets.env"
-PROTECTED = {ROOT / "supervisor.py", ROOT / "review.py", ROOT / "agent" / "goal.md", ROOT / "agent" / "review.md", SECRETS_FILE}
-PUBLIC_CONFIG = {"EXPERT_BASE_URL", "EXPERT_MODELS", "EXPERT_DAILY", "DEEPSEEK_MODEL", "REVIEW_MODEL", "REVIEW_EVERY"}
+PROTECTED = {ROOT / p for p in ("supervisor.py", "review.py", "notify.py", "wechat.py", "start.sh", "stop.sh",
+                                 "setup_agent_user.sh", "agent/goal.md", "agent/review.md", "secrets.env")}
+PUBLIC_CONFIG = {"EXPERT_BASE_URL", "EXPERT_MODELS", "EXPERT_DAILY", "DEEPSEEK_MODEL", "REVIEW_MODEL", "REVIEW_EVERY",
+                 "DAILY_BUDGET_CNY", "AGENT_USER"}
 
 SECRETS = {}
 if SECRETS_FILE.exists():
@@ -98,15 +100,6 @@ def fetch_url(url: str):
     return re.sub(r"\s+", " ", text)
 
 
-def notify(title, body):
-    """推送到人类微信：配置了 SERVERCHAN_KEY 用 Server酱，配置了 PUSHPLUS_TOKEN 用 PushPlus。"""
-    print(f"\n[通知] {title}\n{body}")
-    if key := os.getenv("SERVERCHAN_KEY"):
-        requests.post(f"https://sctapi.ftqq.com/{key}.send", data={"title": title, "desp": body}, timeout=10)
-    elif token := os.getenv("PUSHPLUS_TOKEN"):
-        requests.post("https://www.pushplus.plus/send", json={"token": token, "title": title, "content": body}, timeout=10)
-
-
 @tool
 def ask_human(question: str):
     """通过微信向人类提问、请求批准或索要账号。任何对外操作（发帖、私信、注册、付款、提交给客户、上架）之前必须调用。
@@ -115,8 +108,7 @@ def ask_human(question: str):
     n = len(re.findall(r"^## #", text, re.M)) + 1
     with open(REQUESTS, "a", encoding="utf-8") as f:
         f.write(f"\n## #{n} [待答复] {datetime.now():%m-%d %H:%M}\n问题：{question}\n答复：\n")
-    notify(f"#{n} {question[:28]}", f"{question}\n\n请在 workspace/requests.md 的 #{n} 下填写答复。")
-    return f"已发到人类微信（请求 #{n}）。不要等待，先做不依赖这个答复的事。"
+    return f"已记录为请求 #{n}，人类会在微信上收到并直接答复。不要等待，先做不依赖这个答复的事。"
 
 
 @tool
@@ -134,8 +126,14 @@ def ask_expert(question: str, model: str = ""):
     usage[key] = usage.get(key, 0) + 1
     usage_file.write_text(json.dumps(usage))
     client = OpenAI(api_key=os.environ["EXPERT_API_KEY"], base_url=os.environ["EXPERT_BASE_URL"])
-    r = client.chat.completions.create(model=model or models[0], messages=[{"role": "user", "content": question}], max_tokens=8000)
-    return r.choices[0].message.content
+    errors = []
+    for m in dict.fromkeys([model, *models] if model else models):
+        try:
+            r = client.chat.completions.create(model=m, messages=[{"role": "user", "content": question}], max_tokens=8000)
+            return f"（{m} 的回答）\n{r.choices[0].message.content}"
+        except Exception as e:
+            errors.append(f"{m}: {e}")
+    return "所有专家模型都调用失败：\n" + "\n".join(errors)
 
 
 @tool

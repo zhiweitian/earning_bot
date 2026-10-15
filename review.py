@@ -47,15 +47,24 @@ def main(n):
         f"# token 用量（主模型每天）\n{read('logs/usage.json')}",
     ])
 
-    model = s.get("REVIEW_MODEL") or s["EXPERT_MODELS"].split(",")[0]
     client = OpenAI(api_key=s["EXPERT_API_KEY"], base_url=s["EXPERT_BASE_URL"])
-    r = client.chat.completions.create(model=model, max_tokens=6000, messages=[
-        {"role": "system", "content": PROMPT}, {"role": "user", "content": material}])
-    text = r.choices[0].message.content.strip()
+    models = [m.strip() for m in f"{s.get('REVIEW_MODEL', '')},{s.get('EXPERT_MODELS', '')}".split(",") if m.strip()]
+    for model in dict.fromkeys(models):
+        try:
+            r = client.chat.completions.create(model=model, max_tokens=6000, messages=[
+                {"role": "system", "content": PROMPT}, {"role": "user", "content": material}])
+            text = r.choices[0].message.content.strip()
+            break
+        except Exception as e:
+            print(f"{model} 复盘失败，换下一个：{e}")
+    else:
+        notify("复盘失败", "所有复盘模型都调用失败，检查 OpenRouter 余额和网络。")
+        return
 
     now = datetime.now()
     review = f"（{now:%m-%d %H:%M} 由 {model} 复盘最近 {len(rows)} 轮）\n\n{text}"
     (ROOT / "agent" / "review.md").write_text(review, encoding="utf-8")
+    (ROOT / "agent" / "review.md").chmod(0o644)
     (ROOT / "logs" / "reviews").mkdir(parents=True, exist_ok=True)
     (ROOT / "logs" / "reviews" / f"{now:%Y%m%d-%H%M}.md").write_text(review, encoding="utf-8")
     notify(f"复盘 {text.splitlines()[0].removeprefix('结论：')}", review)
