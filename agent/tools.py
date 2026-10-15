@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKSPACE = ROOT / "workspace"
 REQUESTS = WORKSPACE / "requests.md"
 SECRETS_FILE = ROOT / "secrets.env"
-PROTECTED = {ROOT / "supervisor.py", ROOT / "agent" / "goal.md", SECRETS_FILE}
-PUBLIC_CONFIG = {"EXPERT_BASE_URL", "EXPERT_MODELS", "EXPERT_DAILY", "DEEPSEEK_MODEL"}
+PROTECTED = {ROOT / "supervisor.py", ROOT / "review.py", ROOT / "agent" / "goal.md", ROOT / "agent" / "review.md", SECRETS_FILE}
+PUBLIC_CONFIG = {"EXPERT_BASE_URL", "EXPERT_MODELS", "EXPERT_DAILY", "DEEPSEEK_MODEL", "REVIEW_MODEL", "REVIEW_EVERY"}
 
 SECRETS = {}
 if SECRETS_FILE.exists():

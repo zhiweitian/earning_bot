@@ -83,6 +83,7 @@ def build_system(inbox_text="（没有新答复）"):
         "{skills}": skills_list(),
         "{recent}": recent_sessions(),
         "{inbox}": inbox_text,
+        "{review}": read(AGENT / "review.md") or "（还没有复盘）",
         "{secrets}": ", ".join(k for k in tools.SECRETS if k not in tools.PUBLIC_CONFIG) or "（暂无）",
         "{experts}": os.getenv("EXPERT_MODELS") or "（未配置，暂时不能用 ask_expert）",
         "{max_steps}": str(MAX_STEPS),
@@ -155,7 +156,7 @@ if __name__ == "__main__":
     tools.WORKSPACE.mkdir(exist_ok=True)
     (AGENT / "skills").mkdir(exist_ok=True)
     if "--check" in sys.argv:
-        assert all(k in read(AGENT / "prompt.md") for k in ("{goal}", "{memory}", "{inbox}"))
+        assert all(k in read(AGENT / "prompt.md") for k in ("{goal}", "{memory}", "{inbox}", "{review}"))
         build_system()
         assert {"shell", "finish", "ask_human"} <= set(tools.TOOLS)
         print("check ok")
